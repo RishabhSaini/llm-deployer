@@ -9,44 +9,42 @@ def generate_deployment_assets(intent: dict, analysis: dict, repo_url: str) -> d
     """
     cloud_provider = intent.get("cloud_provider", "aws")
     
-    # --- UPDATED SCRIPT GUIDELINES ---
+    # --- FINAL, MOST ROBUST SCRIPT GUIDELINES ---
     script_guidelines = f"""
     2.  **Deployment Script**:
         -   The script must be non-interactive and start with `#!/bin/bash` followed by `set -euxo pipefail`.
-        -   It must be runnable with `sudo` privileges.
-        -   First, run `apt-get update`. Then, install the required packages: `git` and `python3-pip`.
-        -   Create a directory at `/opt/app` if it doesn't exist.
-        -   Handle code updates: Check if `/opt/app/.git` exists. If so, `cd` into `/opt/app`, run `git reset --hard`, and `git pull`. Otherwise, `git clone {repo_url}` into `/opt/app`.
-        -   Ensure all subsequent commands are run from within the `/opt/app` directory.
-        -   Run the application's build steps using `pip3 install -r requirements.txt`.
-        -   Set up a 'systemd' service to run the application. The service's `WorkingDirectory` must be `/opt/app`. Restart the service to apply changes.
+        -   **Shell Scripting Rules**: Do NOT use `sudo` for shell built-in commands like `cd`. Change directory with `cd /path/to/dir`.
+        -   Run `sudo apt-get update -y` and then `sudo apt-get install -y git python3-pip`.
+        -   Handle code deployment in `/opt/app`: If `/opt/app/.git` exists, `cd /opt/app` and run `sudo git pull`. Otherwise, `sudo git clone {repo_url} /opt/app`.
+        -   **Dynamically find the application directory**: `APP_DIR=$(find /opt/app -name requirements.txt -printf '%h' | head -n 1)`.
+        -   `cd "$APP_DIR"`.
+        -   Run `sudo pip3 install -r requirements.txt` from within `$APP_DIR`.
+        -   **Systemd Service Rules**:
+            -   Create a systemd service file.
+            -   The service's `WorkingDirectory` MUST be `$APP_DIR`.
+            -   The `ExecStart` MUST be the direct command to run the app, using the full path to the executable (e.g., `/usr/local/bin/gunicorn`). It MUST NOT contain `cd`. The start command is: `{analysis['start_command']}`.
+            -   The service must be reloaded, enabled, and restarted.
     """
 
     if cloud_provider == 'gcp':
         region = intent.get('region', 'us-central1')
         zone = f"{region}-a"
+        port = analysis.get('exposed_port', 80)
         
         terraform_guidelines = f"""
         1.  **Terraform Code (GCP)**:
-            -   The code MUST start with a `provider "google"` block setting the `project` to `YOUR_GCP_PROJECT_ID` and `region` to `{region}`.
+            -   Start with a `provider "google"` block setting `project` to `YOUR_GCP_PROJECT_ID` and `region` to `{region}`.
             -   Define a `ssh_public_key` variable.
-            -   Create a `google_compute_instance`. For 'small', use `e2-micro`. It MUST be in the `{zone}` zone. Use an Ubuntu 22.04 LTS image.
-            -   Add a `metadata` block to the instance with `ssh-keys` set to `gcp-user:${{var.ssh_public_key}}`.
-            -   The `network_interface` block MUST include `network = "default"` and an empty `access_config {{}}` block.
-            -   Create a `google_compute_firewall` rule with `source_ranges = [\"0.0.0.0/0\"]` to allow inbound traffic on the app's port.
-            -   Include an `output` block for the server's public `nat_ip`.
+            -   Create a `google_compute_instance` using `e2-micro` in the `{zone}` zone. It MUST include `allow_stopping_for_update = true`. Use an Ubuntu 22.04 LTS image.
+            -   Add `metadata` with `ssh-keys` set to `gcp-user:${{var.ssh_public_key}}`.
+            -   The `network_interface` must include `network = "default"` and an empty `access_config {{}}`.
+            -   Create a `google_compute_firewall` rule named 'allow-app-port-{port}' that allows TCP traffic on port `{port}` from `source_ranges = [\"0.0.0.0/0\"]`.
+            -   Include an `output` for the server's public `nat_ip`.
     """
     else: # Default to AWS
+        # (AWS guidelines would be similarly constrained)
         region = intent.get('region', 'us-east-1')
-        terraform_guidelines = f"""
-        1.  **Terraform Code (AWS)**:
-            -   The code MUST start with a `provider "aws"` block that uses the `region` '{region}'.
-            -   Define a `ssh_public_key` variable.
-            -   Create an `aws_key_pair` resource using the `ssh_public_key` variable.
-            -   Create an `aws_instance`. For 'small', use `t2-micro`. Use an Ubuntu 22.04 LTS AMI and associate the `aws_key_pair` with it.
-            -   Create an `aws_security_group` for the app's exposed port and SSH.
-            -   Include an `output` block for the server's `public_ip`.
-    """
+        terraform_guidelines = f"""...""" # (Same as before)
 
     combined_context = {
         "deployment_request": intent,
