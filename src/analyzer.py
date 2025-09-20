@@ -6,12 +6,11 @@ import tempfile
 import shutil
 from .llm_service import invoke_llm
 
-# A list of filenames that are highly indicative of the project's stack and configuration.
-# We will read the content of these files to send to the LLM.
 HIGH_SIGNAL_FILES = [
     'requirements.txt', 'package.json', 'Dockerfile', 'docker-compose.yml',
     'pom.xml', 'build.gradle', 'Gemfile', 'go.mod', 'Procfile',
     'app.py', 'main.py', 'server.js', 'index.js', 'wsgi.py',
+    'README.md',
 ]
 
 def _clone_repo(repo_url: str, temp_dir: str):
@@ -35,7 +34,6 @@ def _summarize_repo_structure(repo_path: str) -> str:
     file_contents = "\n\nKey File Contents:\n"
     
     for root, dirs, files in os.walk(repo_path):
-        # Exclude git directory from the summary
         if '.git' in dirs:
             dirs.remove('.git')
 
@@ -48,10 +46,11 @@ def _summarize_repo_structure(repo_path: str) -> str:
             summary += f"{sub_indent}{f}\n"
             if f in HIGH_SIGNAL_FILES:
                 try:
-                    file_path = os.path.join(root, f)
-                    with open(file_path, 'r', encoding='utf-8') as file_content:
-                        content = file_content.read(2000) # Read first 2000 chars
-                        file_contents += f"\n--- Content of {f} ---\n{content}\n"
+                    # Get the relative path for context
+                    relative_path = os.path.relpath(os.path.join(root, f), repo_path)
+                    with open(os.path.join(root, f), 'r', encoding='utf-8') as file_content:
+                        content = file_content.read(4000) 
+                        file_contents += f"\n--- Content of ./{relative_path} ---\n{content}\n"
                 except Exception as e:
                     file_contents += f"\n--- Could not read {f}: {e} ---\n"
     
@@ -60,40 +59,37 @@ def _summarize_repo_structure(repo_path: str) -> str:
 def analyze_codebase(repo_url: str) -> dict:
     """
     Clones a repository, summarizes its contents, and uses an LLM to analyze it.
-
-    Args:
-        repo_url: The URL of the GitHub repository.
-
-    Returns:
-        A dictionary with the code analysis.
     """
-    # Create a temporary directory that will be automatically cleaned up
     with tempfile.TemporaryDirectory() as temp_dir:
         _clone_repo(repo_url, temp_dir)
         repo_summary = _summarize_repo_structure(temp_dir)
 
+        # --- FINAL, MOST EXPLICIT PROMPT ---
         prompt = f"""
-            System: You are a senior full-stack developer. Analyze the provided code summary
-            and return a JSON object. **Your output must strictly follow the JSON schema provided below.**
+            System: You are an expert software engineer. Your task is to analyze the provided code
+            repository summary and return a structured JSON object.
 
-            JSON Schema:
+            Your output MUST strictly follow this JSON schema:
             {{
               "language": "string",
               "framework": "string or null",
-              "build_steps": ["string"],
+              "build_steps": ["string containing full command with correct paths"],
               "start_command": "string",
               "exposed_port": "integer"
             }}
             
-            Guidelines:
-            - For 'start_command', provide the command for a production setting (e.g., use gunicorn for Flask).
-            - If a 'Dockerfile' is present, it is the most reliable source of truth.
-            - If no port is explicitly defined, use a conventional default (e.g., 5000 for Flask).
+            Analysis Guidelines:
+            1.  **File Paths are Critical**: The repository summary shows the full path to key files
+                (e.g., `./app/requirements.txt`). Your `build_steps` MUST use these correct paths.
+                If a `requirements.txt` is in a subdirectory, the command must be, for example,
+                `pip3 install -r app/requirements.txt`.
+            2.  **README is Priority**: Read the `README.md` first for explicit instructions.
+            3.  **Production Commands**: The 'start_command' must be for a production environment.
             
             Repository Summary:
             {repo_summary}
 
-            Now, provide the structured JSON analysis adhering strictly to the schema.
+            Now, provide the structured JSON analysis, paying close attention to the file paths.
         """
 
         try:
@@ -105,5 +101,4 @@ def analyze_codebase(repo_url: str) -> dict:
             print(f"Error during codebase analysis: {e}")
             raise
         finally:
-            # The 'with' statement handles the cleanup
             print(f"Cleaned up temporary directory: {temp_dir}")
