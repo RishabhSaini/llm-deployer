@@ -9,20 +9,21 @@ def generate_deployment_assets(intent: dict, analysis: dict, repo_url: str) -> d
     """
     cloud_provider = intent.get("cloud_provider", "aws")
     
-    # --- FINAL, MOST ROBUST SCRIPT GUIDELINES ---
+    # --- FINAL, PRODUCTION-GRADE SCRIPT GUIDELINES ---
     script_guidelines = f"""
     2.  **Deployment Script**:
         -   The script must be non-interactive and start with `#!/bin/bash` followed by `set -euxo pipefail`.
-        -   **Shell Scripting Rules**: Do NOT use `sudo` for shell built-in commands like `cd`. Change directory with `cd /path/to/dir`.
-        -   Run `sudo apt-get update -y` and then `sudo apt-get install -y git python3-pip`.
-        -   Handle code deployment in `/opt/app`: If `/opt/app/.git` exists, `cd /opt/app` and run `sudo git pull`. Otherwise, `sudo git clone {repo_url} /opt/app`.
-        -   **Dynamically find the application directory**: `APP_DIR=$(find /opt/app -name requirements.txt -printf '%h' | head -n 1)`.
-        -   `cd "$APP_DIR"`.
-        -   Run `sudo pip3 install -r requirements.txt` from within `$APP_DIR`.
+        -   It must be runnable with `sudo` privileges.
+        -   First, run `apt-get update -y` and then install required packages: `git` and `python3-pip`.
+        -   Handle code deployment in `/opt/app`: If `/opt/app/.git` exists, `cd` in and `git pull`. Otherwise, `git clone {repo_url}` into `/opt/app`.
+        -   Dynamically find the application directory containing `requirements.txt` (e.g., `APP_DIR=$(find /opt/app -name requirements.txt -printf '%h' | head -n 1)`).
+        -   `cd` into the found `$APP_DIR`.
+        -   Run `sudo pip3 install -r requirements.txt`.
+        -   Also, explicitly install the production server with `sudo pip3 install gunicorn`.
         -   **Systemd Service Rules**:
             -   Create a systemd service file.
             -   The service's `WorkingDirectory` MUST be `$APP_DIR`.
-            -   The `ExecStart` MUST be the direct command to run the app, using the full path to the executable (e.g., `/usr/local/bin/gunicorn`). It MUST NOT contain `cd`. The start command is: `{analysis['start_command']}`.
+            -   The `ExecStart` command MUST run gunicorn as a python module: `/usr/bin/python3 -m gunicorn --bind 0.0.0.0:5000 app:app`.
             -   The service must be reloaded, enabled, and restarted.
     """
 
@@ -42,7 +43,6 @@ def generate_deployment_assets(intent: dict, analysis: dict, repo_url: str) -> d
             -   Include an `output` for the server's public `nat_ip`.
     """
     else: # Default to AWS
-        # (AWS guidelines would be similarly constrained)
         region = intent.get('region', 'us-east-1')
         terraform_guidelines = f"""...""" # (Same as before)
 

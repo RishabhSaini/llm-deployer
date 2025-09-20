@@ -23,7 +23,6 @@ def _generate_ssh_key(workdir_path: str):
         key.write_private_key_file(private_key_path)
         
         with open(public_key_path, "w") as f:
-            # Format needed for GCP metadata is slightly different than a standard .pub file
             f.write(f"{key.get_name()} {key.get_base64()}")
         
         os.chmod(private_key_path, 0o600)
@@ -35,7 +34,6 @@ def _run_remote_script(hostname, username, private_key_path, local_script_path):
     ssh_client = paramiko.SSHClient()
     ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     
-    # Retry connection as the VM might still be booting
     for i in range(10):
         try:
             print(f"Connecting to server (attempt {i+1})...")
@@ -49,20 +47,17 @@ def _run_remote_script(hostname, username, private_key_path, local_script_path):
         raise RuntimeError("Could not connect to the SSH server after multiple attempts.")
 
     try:
-        # 1. Upload the script
         remote_script_path = f"/tmp/{os.path.basename(local_script_path)}"
         print(f"Uploading {local_script_path} to {remote_script_path}...")
         with ssh_client.open_sftp() as sftp:
             sftp.put(local_script_path, remote_script_path)
-            sftp.chmod(remote_script_path, 0o755) # Make it executable
+            sftp.chmod(remote_script_path, 0o755)
         print("✅ Script uploaded.")
 
-        # 2. Execute the script
         command = f"sudo {remote_script_path}"
         print(f"Executing remote command: {command}")
         stdin, stdout, stderr = ssh_client.exec_command(command, get_pty=True)
 
-        # 3. Stream output
         print("\n--- 📜 Remote Script Output ---")
         for line in iter(stdout.readline, ""):
             print(line, end="")
@@ -70,7 +65,9 @@ def _run_remote_script(hostname, username, private_key_path, local_script_path):
         exit_status = stdout.channel.recv_exit_status()
         if exit_status != 0:
             print("\n--- ❌ Remote Script Errors ---")
-            print(stderr.read().decode(), end="")
+            error_output = stderr.read().decode()
+            if error_output:
+                print(error_output, end="")
             raise RuntimeError(f"Remote script failed with exit code {exit_status}")
 
         print("\n--- ✅ Remote script executed successfully. ---")
@@ -123,8 +120,10 @@ def execute_deployment(assets: dict, auto_approve: bool):
     workdir_path = os.path.abspath(WORKDIR_NAME)
     os.makedirs(workdir_path, exist_ok=True)
     
+    # --- THIS IS THE FIX ---
     terraform_content = assets["terraform_code"]
     if isinstance(terraform_content, dict):
+        print("Detected nested dictionary for Terraform code. Extracting content.")
         terraform_content = list(terraform_content.values())[0]
 
     project_id = _get_gcp_project_id()
@@ -145,7 +144,7 @@ def execute_deployment(assets: dict, auto_approve: bool):
     
     apply_command = [
         'terraform', 'apply', 
-        f'-var=ssh_public_key={public_key_content}', 
+        f'-var=ssh_public_key={public_key_content}',
     ]
     if auto_approve:
         apply_command.append('-auto-approve')
@@ -160,11 +159,10 @@ def execute_deployment(assets: dict, auto_approve: bool):
 
     _run_remote_script(server_ip, REMOTE_USERNAME, private_key_path, script_file_path)
     
-    # Extract the port from the analysis to display in the final URL
     try:
         port = assets['analysis']['exposed_port']
     except KeyError:
-        port = 80 # Default to 80 if not found
+        port = 80
     print(f"\n🎉 Fully automated deployment complete! Your app should be accessible at http://{server_ip}:{port}")
 
 
